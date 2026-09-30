@@ -1,4 +1,4 @@
- /* =====================================
+/* =====================================
    CHESS GAME
 ===================================== */
 
@@ -96,6 +96,32 @@ let moveHistory = [];
 let lastMove = null;
 
 let gameOver = false;
+
+
+/* =====================================
+   AI OPPONENT
+   You play White; AI plays Black.
+===================================== */
+
+let selectedDifficulty = "Beginner";
+let aiThinking = false;
+
+const AI_SETTINGS = {
+    Beginner:     { depth: 1, randomness: 0.75, blunderRate: 0.22 },
+    Intermediate: { depth: 2, randomness: 0.28, blunderRate: 0.10 },
+    Expert:       { depth: 2, randomness: 0.08, blunderRate: 0.035 },
+    Master:       { depth: 3, randomness: 0.025, blunderRate: 0.012 },
+    Grandmaster:  { depth: 3, randomness: 0.0, blunderRate: 0.0 }
+};
+
+const PIECE_VALUES = {
+    p: 100,
+    n: 320,
+    b: 330,
+    r: 500,
+    q: 900,
+    k: 20000
+};
 
 
 /* Castling */
@@ -302,7 +328,7 @@ function renderBoard() {
 
 function handleSquareClick(row, col) {
 
-    if (gameOver) {
+    if (gameOver || aiThinking || currentTurn !== "w") {
         return;
     }
 
@@ -472,7 +498,6 @@ function makeMove(from, to) {
 /* =====================================
    FINISH MOVE
 ===================================== */
-
 function finishMove(
     from,
     to,
@@ -981,6 +1006,14 @@ function addMoveIfValid(
     currentBoard,
     moves
 ) {
+     row,
+    col,
+    newRow,
+    newCol,
+    color,
+    currentBoard,
+    moves
+) {
 
     if (
         !insideBoard(
@@ -1473,7 +1506,8 @@ function insideBoard(row, col) {
         row < 8 &&
         col >= 0 &&
         col < 8
-    );
+         );
+
 
 }
 
@@ -1973,6 +2007,9 @@ document
                 checkGameStatus();
 
                 renderBoard();
+                             if (!gameOver && currentTurn === "b") {
+                    scheduleAIMove();
+                }
 
             }
         );
@@ -1985,6 +2022,8 @@ document
 ===================================== */
 
 function restartGame() {
+
+    aiThinking = false;
 
     board =
         copyBoard(startingBoard);
@@ -2040,34 +2079,482 @@ newGameBtn.addEventListener(
 
 
 /* =====================================
-   DIFFICULTY BUTTONS
+   DIFFICULTY BUTTONS + AI
 ===================================== */
 
 const difficultyButtons =
-    document.querySelectorAll(
-        ".difficulty-btn"
-    );
-
+    document.querySelectorAll(".difficulty-btn");
 
 difficultyButtons.forEach(button => {
 
-    button.addEventListener(
-        "click",
-        () => {
+    button.addEventListener("click", () => {
 
-            difficultyButtons.forEach(
-                btn =>
-                    btn.classList.remove(
-                        "active"
-                    )
-            );
+        difficultyButtons.forEach(btn =>
+            btn.classList.remove("active")
+        );
 
+        button.classList.add("active");
 
-            button.classList.add(
-                "active"
-            );
+        selectedDifficulty =
+            button.textContent.trim();
 
-        }
-    );
+        /* Changing difficulty starts a fresh game so
+           the new AI strength is applied cleanly. */
+        restartGame();
+    });
 
 });
+
+
+/* =====================================
+   AI MOVE SCHEDULER
+===================================== */
+
+function scheduleAIMove() {
+
+    if (gameOver || currentTurn !== "b" || aiThinking) {
+        return;
+    }
+
+    aiThinking = true;
+
+    /* Small delay makes the AI feel like it is thinking. */
+    const delay =
+        selectedDifficulty === "Beginner" ? 450 :
+        selectedDifficulty === "Intermediate" ? 650 :
+        selectedDifficulty === "Expert" ? 850 :
+        selectedDifficulty === "Master" ? 1100 :
+        1300;
+
+    setTimeout(() => {
+
+        if (gameOver || currentTurn !== "b") {
+            aiThinking = false;
+            return;
+        }
+
+        const move = chooseAIMove();
+
+        if (move) {
+            playAIMove(move);
+        }
+
+        aiThinking = false;
+
+    }, delay);
+}
+
+
+/* =====================================
+   FIND ALL LEGAL MOVES
+===================================== */
+
+function getAllLegalMoves(color, currentBoard = board) {
+
+    const moves = [];
+
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+
+            const piece = currentBoard[row][col];
+
+            if (!piece || piece[0] !== color) {
+                continue;
+            }
+
+            const pieceMoves =
+                getLegalMoves(row, col, currentBoard);
+
+            for (const move of pieceMoves) {
+                moves.push({
+                    from: { row, col },
+                    to: { row: move.row, col: move.col }
+                });
+            }
+        }
+    }
+
+    return moves;
+}
+
+
+/* =====================================
+   APPLY MOVE TO A COPIED BOARD
+===================================== */
+
+function applyMoveToBoard(currentBoard, move) {
+
+    const next = copyBoard(currentBoard);
+
+    const movingPiece =
+        next[move.from.row][move.from.col];
+
+    next[move.to.row][move.to.col] =
+        movingPiece;
+
+    next[move.from.row][move.from.col] =
+        null;
+
+    /* Handle castling on the copied board. */
+    if (
+        movingPiece &&
+        movingPiece[1] === "k" &&
+        Math.abs(move.to.col - move.from.col) === 2
+    ) {
+
+        if (move.to.col === 6) {
+            next[move.from.row][5] =
+                next[move.from.row][7];
+
+            next[move.from.row][7] = null;
+        }
+
+        if (move.to.col === 2) {
+            next[move.from.row][3] =
+                next[move.from.row][0];
+
+            next[move.from.row][0] = null;
+        }
+    }
+
+    return next;
+}
+
+
+/* =====================================
+   EVALUATION
+   Positive = good for Black.
+===================================== */
+
+function evaluateBoard(currentBoard) {
+
+    let score = 0;
+
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+
+            const piece = currentBoard[row][col];
+
+            if (!piece) {
+                continue;
+            }
+
+            const value = PIECE_VALUES[piece[1]];
+
+            if (piece[0] === "b") {
+                score += value;
+            } else {
+                score -= value;
+            }
+
+            /* Small positional bonuses. */
+            if (piece[1] === "p") {
+
+                const advance =
+                    piece[0] === "b"
+                        ? row - 1
+                        : 6 - row;
+
+                if (piece[0] === "b") {
+                    score += Math.max(0, row - 1) * 3;
+                } else {
+                    score -= Math.max(0, 6 - row) * 3;
+                }
+            }
+
+            /* Center control. */
+            const centerDistance =
+                Math.abs(3.5 - row) +
+                Math.abs(3.5 - col);
+
+            if (piece[1] !== "k") {
+                const centerBonus =
+                    Math.max(0, 4 - centerDistance) * 2;
+
+                score +=
+                    piece[0] === "b"
+                        ? centerBonus
+                        : -centerBonus;
+            }
+        }
+    }
+
+    return score;
+}
+
+
+/* =====================================
+   MINIMAX
+===================================== */
+
+function minimax(currentBoard, depth, maximizingPlayer, alpha, beta) {
+
+    if (depth <= 0) {
+        return evaluateBoard(currentBoard);
+    }
+
+    const color =
+        maximizingPlayer ? "b" : "w";
+
+    const moves =
+        getAllLegalMoves(color, currentBoard);
+
+    if (moves.length === 0) {
+
+        const king =
+            findKing(color, currentBoard);
+
+        if (
+            king &&
+            isSquareAttacked(
+                king.row,
+                king.col,
+                oppositeColor(color),
+                currentBoard
+            )
+        ) {
+            return maximizingPlayer ? -1000000 : 1000000;
+        }
+
+        return 0;
+    }
+
+    if (maximizingPlayer) {
+
+        let best = -Infinity;
+
+        for (const move of moves) {
+
+            const next =
+                applyMoveToBoard(currentBoard, move);
+
+            const value =
+                minimax(
+                    next,
+                    depth - 1,
+                    false,
+                    alpha,
+                    beta
+                );
+
+            best = Math.max(best, value);
+            alpha = Math.max(alpha, value);
+
+            if (beta <= alpha) {
+                break;
+            }
+        }
+
+        return best;
+
+    } else {
+
+        let best = Infinity;
+
+        for (const move of moves) {
+
+            const next =
+                applyMoveToBoard(currentBoard, move);
+
+            const value =
+                minimax(
+                    next,
+                    depth - 1,
+                    true,
+                    alpha,
+                    beta
+                );
+
+            best = Math.min(best, value);
+            beta = Math.min(beta, value);
+
+            if (beta <= alpha) {
+                break;
+            }
+        }
+
+        return best;
+    }
+}
+
+
+/* =====================================
+   CHOOSE AI MOVE
+===================================== */
+
+function chooseAIMove() {
+
+    const settings =
+        AI_SETTINGS[selectedDifficulty];
+
+    const moves =
+        getAllLegalMoves("b", board);
+
+    if (moves.length === 0) {
+        return null;
+    }
+
+    /*
+       Beginner deliberately makes weaker choices.
+       Higher levels increasingly choose the best move.
+    */
+
+    const scoredMoves = [];
+
+    for (const move of moves) {
+
+        const captured =
+            board[move.to.row][move.to.col];
+
+        const next =
+            applyMoveToBoard(board, move);
+
+        let score =
+            minimax(
+                next,
+                Math.max(0, settings.depth - 1),
+                false,
+                -Infinity,
+                Infinity
+            );
+
+        /* Captures receive their normal material value. */
+        if (captured) {
+            score +=
+                PIECE_VALUES[captured[1]] * 0.8;
+        }
+
+        /* Tiny random variation prevents identical games. */
+        score +=
+            (Math.random() - 0.5) *
+            20 *
+            settings.randomness;
+
+        scoredMoves.push({
+            move,
+            score
+        });
+    }
+
+    scoredMoves.sort(
+        (a, b) => b.score - a.score
+    );
+
+    /*
+       Beginner/intermediate can intentionally pick
+       a weaker candidate sometimes.
+    */
+    if (
+        Math.random() <
+        settings.blunderRate &&
+        scoredMoves.length > 1
+    ) {
+
+        const poolSize =
+            Math.min(
+                scoredMoves.length,
+                selectedDifficulty === "Beginner" ? 6 : 3
+            );
+
+        const index =
+            Math.floor(Math.random() * poolSize);
+
+        return scoredMoves[index].move;
+    }
+
+    return scoredMoves[0].move;
+}
+
+
+/* =====================================
+   PLAY AI MOVE
+===================================== */
+
+function playAIMove(move) {
+
+    const from = move.from;
+    const to = move.to;
+
+    const movingPiece =
+        board[from.row][from.col];
+
+    if (!movingPiece) {
+        return;
+    }
+
+    const capturedPiece =
+        board[to.row][to.col];
+
+    const boardBefore =
+        copyBoard(board);
+
+    /* Make the move. */
+    board[to.row][to.col] =
+        movingPiece;
+
+    board[from.row][from.col] =
+        null;
+
+    updateCastlingRights(
+        movingPiece,
+        from,
+        to,
+        capturedPiece
+    );
+
+    /* Castling. */
+    if (
+        movingPiece[1] === "k" &&
+        Math.abs(to.col - from.col) === 2
+         ) {
+        moveRookForCastle(from, to);
+    }
+
+    lastMove = {
+        from,
+        to
+    };
+
+    const notation =
+        createMoveNotation(from, to);
+
+    moveHistory.push({
+        color: "b",
+        notation
+    });
+
+    currentTurn = "w";
+
+    selectedSquare = null;
+    legalMoves = [];
+
+    updateMoveHistory();
+
+    /*
+       AI automatically promotes to a queen.
+       This keeps the AI from getting stuck on promotion.
+    */
+    if (
+        movingPiece[1] === "p" &&
+        (to.row === 0 || to.row === 7)
+    ) {
+        board[to.row][to.col] =
+            "bq";
+    }
+
+    checkGameStatus();
+    renderBoard();
+}
+
+
+/* =====================================
+   INITIAL AI SAFETY
+===================================== */
+
+/*
+   If this script is loaded while Black is somehow
+   to move, let the AI take over.
+*/
+if (currentTurn === "b") {
+    scheduleAIMove();
+}
